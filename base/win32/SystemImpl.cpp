@@ -31,6 +31,7 @@
 #include "CompatibleNativeFuncs.h"
 #include "DebugIntf.h"
 #include "VersionFormUnit.h"
+#include "ComplexText.h"
 
 //---------------------------------------------------------------------------
 static ttstr TVPAppTitle;
@@ -779,6 +780,22 @@ TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/getTickCount)
 }
 TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(/*object to register*/cls,
 	/*func. name*/getTickCount)
+//----------------------------------------------------------------------
+TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/getTextClusterLength)
+{
+	// System.getTextClusterLength(text) : number of characters at the start
+	// of "text" that form one grapheme cluster and must be drawn / wrapped
+	// together (complex scripts such as Burmese).
+	if(numparams < 1) return TJS_E_BADPARAMCOUNT;
+	if(result)
+	{
+		ttstr text(*param[0]);
+		*result = (tjs_int)TVPGetTextClusterLength(text.c_str());
+	}
+	return TJS_S_OK;
+}
+TJS_END_NATIVE_STATIC_METHOD_DECL_OUTER(/*object to register*/cls,
+	/*func. name*/getTextClusterLength)
 //----------------------------------------------------------------------
 TJS_BEGIN_NATIVE_METHOD_DECL(/*func. name*/getKeyState)
 {

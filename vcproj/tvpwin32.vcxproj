@@ -686,6 +686,15 @@
     <ClCompile Include="..\visual\FontSystem.cpp" />
     <ClCompile Include="..\visual\FreeType.cpp" />
     <ClCompile Include="..\visual\FreeTypeFontRasterizer.cpp" />
+    <ClCompile Include="..\visual\win32\ComplexText.cpp">
+      <AdditionalIncludeDirectories>../external/harfbuzz/src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\external\harfbuzz\src\harfbuzz.cc">
+      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <PreprocessorDefinitions>HB_NO_MT;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)harfbuzz_all.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\visual\gl\adjust_color_sse2.cpp" />
     <ClCompile Include="..\visual\gl\blend_function.cpp" />
     <ClCompile Include="..\visual\gl\blend_function_avx2.cpp">

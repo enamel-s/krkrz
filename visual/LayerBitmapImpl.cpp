@@ -35,6 +35,7 @@
 #include "CharacterData.h"
 #include "PrerenderedFont.h"
 #include "FontSystem.h"
+#include "ComplexText.h"
 #include "FreeType.h"
 #include "FreeTypeFontRasterizer.h"
 #include "GDIFontRasterizer.h"
@@ -292,6 +293,15 @@ static tTVPCharacterData * TVPGetCharacter(const tTVPFontAndCharacterData & font
 	}
 
 	// not found in the cache
+
+	if(font.IsGlyph)
+	{
+		// glyph of a shaped complex-script run
+		tTVPCharacterData *data = TVPGetShapedGlyphBitmap(font, aofsx, aofsy);
+		tTVPCharacterDataHolder holder(data);
+		TVPFontCache.AddWithHash(font, hash, holder);
+		return data;
+	}
 
 	// look prerendered font
 	const tTVPPrerenderedCharacterItem *pitem = NULL;
@@ -1465,6 +1475,67 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(const tTVPRect &destrect,
 	// prepare all drawn characters
 	while(*p) // while input string is remaining
 	{
+		// complex-script run (Burmese etc.): shape it and draw by glyph index
+		tjs_int runlen = (*p >= 0x0900) ? TVPGetComplexRunLength(p) : 0;
+		if(runlen > 0)
+		{
+			std::vector<tTVPShapedGlyph> glyphs;
+			ttstr runface;
+			tjs_int runwidth = 0;
+			if(TVPShapeComplexRun(Font, p, runlen, glyphs, runface, runwidth))
+			{
+				tTVPFontAndCharacterData gfont = font;
+				gfont.IsGlyph = true;
+				if(runface != Font.Face)
+				{
+					// fallback font
+					gfont.Font.Face = runface;
+					gfont.FontHash = tTJSHashFunc<ttstr>::Make(runface);
+					gfont.FontHash ^= Font.Height ^ Font.Flags ^ Font.Angle;
+				}
+				for(size_t gi = 0; gi < glyphs.size(); gi++)
+				{
+					gfont.Character = glyphs[gi].Glyph;
+					gfont.Blured = false;
+					tTVPCharacterData * data = NULL;
+					tTVPCharacterData * shadow = NULL;
+					try
+					{
+						data = TVPGetCharacter(gfont, this, PrerenderedFont, AscentOfsX, AscentOfsY);
+						if(data && shlevel != 0)
+						{
+							if(shlevel == 255 && shwidth == 0)
+							{
+								shadow = data;
+								shadow->AddRef();
+							}
+							else
+							{
+								gfont.Blured = true;
+								shadow = TVPGetCharacter(gfont, this, PrerenderedFont, AscentOfsX, AscentOfsY);
+							}
+						}
+						if(data && data->BlackBoxX != 0 && data->BlackBoxY != 0)
+						{
+							drawdata.push_back(tTVPCharacterDrawData(data, shadow,
+								x + glyphs[gi].X, y - glyphs[gi].Y));
+						}
+					}
+					catch(...)
+					{
+						if(data) data->Release();
+						if(shadow) shadow->Release();
+						throw;
+					}
+					if(data) data->Release();
+					if(shadow) shadow->Release();
+				}
+				x += runwidth;
+				p += runlen;
+				continue;
+			}
+		}
+
 		font.Character = *p;
 
 		font.Blured = false;
@@ -1594,6 +1665,17 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr & text)
 			const tjs_char *buf = text.c_str();
 			while(*buf)
 			{
+				tjs_int runlen = (*buf >= 0x0900) ? TVPGetComplexRunLength(buf) : 0;
+				if(runlen > 0)
+				{
+					tjs_int runwidth = TVPGetComplexRunWidth(Font, buf, runlen);
+					if(runwidth >= 0)
+					{
+						width += runwidth;
+						buf += runlen;
+						continue;
+					}
+				}
 				const tTVPPrerenderedCharacterItem * item =
 					PrerenderedFont->Find(*buf);
 				if(item != NULL)
@@ -1618,6 +1700,17 @@ void tTVPNativeBaseBitmap::GetTextSize(const ttstr & text)
 
 			while(*buf)
 			{
+				tjs_int runlen = (*buf >= 0x0900) ? TVPGetComplexRunLength(buf) : 0;
+				if(runlen > 0)
+				{
+					tjs_int runwidth = TVPGetComplexRunWidth(Font, buf, runlen);
+					if(runwidth >= 0)
+					{
+						width += runwidth;
+						buf += runlen;
+						continue;
+					}
+				}
 				tjs_int w, h;
 				GetCurrentRasterizer()->GetTextExtent( *buf, w, h );
 				width += w;

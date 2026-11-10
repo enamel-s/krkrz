@@ -101,8 +101,10 @@ struct tTVPFontAndCharacterData
 	bool Antialiased;
 	bool Blured;
 	bool Hinting;
+	bool IsGlyph; // Character is a glyph index of a shaped run (see ComplexText.h)
+	tTVPFontAndCharacterData() : IsGlyph(false) {}
 	bool operator == (const tTVPFontAndCharacterData &rhs) const {
-		return Character == rhs.Character && Font == rhs.Font &&
+		return Character == rhs.Character && IsGlyph == rhs.IsGlyph && Font == rhs.Font &&
 			Antialiased == rhs.Antialiased && BlurLevel == rhs.BlurLevel &&
 			BlurWidth == rhs.BlurWidth && Blured == rhs.Blured &&
 			Hinting == rhs.Hinting;
@@ -119,6 +121,7 @@ public:
 		v ^= val.Antialiased?1:0;
 		v ^= val.Character;
 		v ^= val.Blured?1:0;
+		v ^= val.IsGlyph?0x40000000:0;
 		v ^= val.BlurLevel ^ val.BlurWidth;
 		return v;
 	}

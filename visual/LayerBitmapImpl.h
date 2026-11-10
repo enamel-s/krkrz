@@ -106,6 +106,7 @@ class tTVPBitmap;
 class tTVPComplexRect;
 class tTVPCharacterData;
 struct tTVPDrawTextData;
+extern bool TVPTextNeedsShaping(const tjs_char *text); // ComplexText.h
 class tTVPPrerenderedFont;
 class tTVPNativeBaseBitmap
 {
@@ -206,7 +207,7 @@ public:
 	{
 		tjs_int len = text.GetLen();
 		if(len == 0) return;
-		if(len >= 2)
+		if(len >= 2 || TVPTextNeedsShaping(text.c_str()))
 			DrawTextMultiple(
 				destrect, x, y, text,
 				color, bltmode, opa,

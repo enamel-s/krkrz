@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 #define _USE_MATH_DEFINES
 #include "tjsCommHead.h"
+#include <cmath>
 
 #include <math.h>
 
@@ -36,6 +37,7 @@
 #include "tjsDictionary.h"
 
 extern void TVPSetFontRasterizer( tjs_int index );
+#include "ComplexText.h"
 extern tjs_int TVPGetFontRasterizer();
 extern FontRasterizer* GetCurrentRasterizer();
 extern void TVPMapPrerenderedFont(const tTVPFont & font, const ttstr & storage);
@@ -9804,6 +9806,17 @@ tjs_int tTJSNI_Font::GetTextWidthDirect(const ttstr & text)
 	const tjs_char *buf = text.c_str();
 	while(*buf)
 	{
+		tjs_int runlen = (*buf >= 0x0900) ? TVPGetComplexRunLength(buf) : 0;
+		if(runlen > 0)
+		{
+			tjs_int runwidth = TVPGetComplexRunWidth(Font, buf, runlen);
+			if(runwidth >= 0)
+			{
+				width += runwidth;
+				buf += runlen;
+				continue;
+			}
+		}
 		tjs_int w, h;
 		GetCurrentRasterizer()->GetTextExtent( *buf, w, h );
 		width += w;
