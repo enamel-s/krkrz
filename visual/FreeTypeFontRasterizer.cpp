@@ -4,6 +4,7 @@
 #include "LayerBitmapIntf.h"
 #include "FreeType.h"
 #include <math.h>
+#include <cmath>
 #include "MsgIntf.h"
 #include "FontSystem.h"
 
