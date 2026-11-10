@@ -182,7 +182,7 @@ void TVPInitWindowOptions()
 
 
 TTVPWindowForm::TTVPWindowForm( tTVPApplication* app, tTJSNI_Window* ni, tTJSNI_Window* parent ) : tTVPWindow(), CurrentMouseCursor(crDefault), touch_points_(this),
-	LayerLeft(0), LayerTop(0), LayerWidth(32), LayerHeight(32),
+	LayerLeft(0), LayerTop(0), ObsoleteInnerSunken(true), ObsoleteShowScrollBars(true), FullScreenSavedMenu(NULL), LayerWidth(32), LayerHeight(32),
 	LastMouseDownX(0), LastMouseDownY(0),
 	HintTimer(NULL), HintDelay(TVP_TOOLTIP_SHOW_DELAY), LastHintSender(NULL),
 	FullScreenDestRect(0,0,0,0) {
@@ -523,14 +523,17 @@ void TTVPWindowForm::SetDrawDeviceDestRect()
 		destrect.right = w;
 		destrect.bottom = h;
 	}
+	// the visible area never moves; only the image inside it does
+	tTVPRect cliprect = GetFullScreenMode() ? FullScreenDestRect : destrect;
+	if( LayerLeft != 0 || LayerTop != 0 ) {
+		destrect.add_offsets(
+			MulDiv(LayerLeft, ActualZoomNumer, ActualZoomDenom),
+			MulDiv(LayerTop,  ActualZoomNumer, ActualZoomDenom) );
+	}
 
 	if( LastSentDrawDeviceDestRect != destrect ) {
 		if( TJSNativeInstance ) {
-			if( GetFullScreenMode() ) {
-				TJSNativeInstance->GetDrawDevice()->SetClipRectangle(FullScreenDestRect);
-			} else {
-				TJSNativeInstance->GetDrawDevice()->SetClipRectangle(destrect);
-			}
+			TJSNativeInstance->GetDrawDevice()->SetClipRectangle(cliprect);
 			TJSNativeInstance->GetDrawDevice()->SetDestRectangle(destrect);
 		}
 		LastSentDrawDeviceDestRect = destrect;
@@ -769,6 +772,12 @@ void TTVPWindowForm::SetFullScreenMode( bool b ) {
 			OrgClientWidth = desired_fs_w;
 			OrgClientHeight = desired_fs_h;
 
+			// A menu bar (menu.dll) takes room at the top of the window and
+			// would push the picture past the bottom of the screen: remove
+			// it while in fullscreen, as Kirikiri2 did.
+			FullScreenSavedMenu = ::GetMenu( GetHandle() );
+			if( FullScreenSavedMenu ) ::SetMenu( GetHandle(), NULL );
+
 			// set BorderStyle
 			OrgStyle = ::GetWindowLong(GetHandle(), GWL_STYLE);
 			OrgExStyle = ::GetWindowLong(GetHandle(), GWL_EXSTYLE);
@@ -779,6 +788,10 @@ void TTVPWindowForm::SetFullScreenMode( bool b ) {
 			try {
 				if(TJSNativeInstance) TVPSwitchToFullScreen( GetHandle(), desired_fs_w, desired_fs_h, TJSNativeInstance->GetDrawDevice() );
 			} catch(...) {
+				if( FullScreenSavedMenu ) {
+					::SetMenu( GetHandle(), FullScreenSavedMenu );
+					FullScreenSavedMenu = NULL;
+				}
 				SetFullScreenMode(false);
 				return;
 			}
@@ -843,6 +856,12 @@ void TTVPWindowForm::SetFullScreenMode( bool b ) {
 			// set BorderStyle
 			SetWindowLong(GetHandle(), GWL_STYLE, OrgStyle);
 			SetWindowLong(GetHandle(), GWL_EXSTYLE, OrgExStyle);
+
+			// put the menu bar back
+			if( FullScreenSavedMenu ) {
+				if( ::GetMenu( GetHandle() ) == NULL ) ::SetMenu( GetHandle(), FullScreenSavedMenu );
+				FullScreenSavedMenu = NULL;
+			}
 
 			// revert the position and size
 			SetBounds(OrgLeft, OrgTop, OrgWidth, OrgHeight);
@@ -1323,6 +1342,20 @@ void TTVPWindowForm::SetPaintBoxSize(tjs_int w, tjs_int h) {
 	LayerWidth  = w;
 	LayerHeight = h;
 	InternalSetPaintBoxSize();
+}
+
+void TTVPWindowForm::SetLayerPosition(tjs_int l, tjs_int t) {
+	if( LayerLeft == l && LayerTop == t ) return;
+	LayerLeft = l;
+	LayerTop = t;
+	InternalSetPaintBoxSize();
+	::InvalidateRect( GetHandle(), NULL, FALSE );
+}
+
+void TTVPWindowForm::BeginMove() {
+	// start an interactive window move, as if the title bar were dragged
+	::ReleaseCapture();
+	::PostMessage( GetHandle(), WM_SYSCOMMAND, SC_MOVE | 0x0002, 0 );
 }
 
 void TTVPWindowForm::SetDefaultMouseCursor() {

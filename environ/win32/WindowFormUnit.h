@@ -162,6 +162,9 @@ private:
 	//-- layer position / size
 	tjs_int LayerLeft;
 	tjs_int LayerTop;
+	bool ObsoleteInnerSunken;
+	bool ObsoleteShowScrollBars;
+	HMENU FullScreenSavedMenu; // menu bar removed while in fullscreen
 	tjs_int LayerWidth;
 	tjs_int LayerHeight;
 	tjs_int ZoomDenom; // Zooming factor denominator (setting)
@@ -307,6 +310,21 @@ public:
 
 	
 	void SetPaintBoxSize(tjs_int w, tjs_int h);
+
+	// Kirikiri2 compatibility (USE_OBSOLETE_FUNCTIONS): Window.setLayerPos,
+	// layerLeft / layerTop, beginMove, innerSunken, showScrollBars.
+	// The layer position offsets the drawn image inside the window (KAG's
+	// [quake] uses it); the last two only remember their value.
+	void SetLayerPosition(tjs_int l, tjs_int t);
+	void SetLayerLeft(tjs_int l) { SetLayerPosition(l, LayerTop); }
+	tjs_int GetLayerLeft() const { return LayerLeft; }
+	void SetLayerTop(tjs_int t) { SetLayerPosition(LayerLeft, t); }
+	tjs_int GetLayerTop() const { return LayerTop; }
+	void BeginMove();
+	void SetInnerSunken(bool b) { ObsoleteInnerSunken = b; }
+	bool GetInnerSunken() const { return ObsoleteInnerSunken; }
+	void SetShowScrollBars(bool b) { ObsoleteShowScrollBars = b; }
+	bool GetShowScrollBars() const { return ObsoleteShowScrollBars; }
 
 	void SetDefaultMouseCursor();
 	void SetMouseCursor(tjs_int handle);
