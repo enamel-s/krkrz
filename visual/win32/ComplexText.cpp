@@ -15,6 +15,8 @@
 #include "CharacterData.h"
 #include "FontSystem.h"
 #include "SysInitIntf.h"
+#include "DebugIntf.h"
+#include <math.h>
 
 #include "hb.h"
 #include "hb-ot.h"
@@ -197,7 +199,181 @@ static void TVPInitComplexFallbackFonts()
 	for(int i = 0; defaults[i]; i++) TVPComplexFallbackFonts.push_back(ttstr(defaults[i]));
 }
 //---------------------------------------------------------------------------
-static tTVPShapeFont *TVPSelectShapeFont(const tTVPFont &font, const tjs_char *text, tjs_int len, ttstr &face)
+//---------------------------------------------------------------------------
+// vertical fitting
+//---------------------------------------------------------------------------
+// Burmese fonts are much taller than Latin ones at the same em size: marks
+// above the line and stacked consonants below it reach well outside the box
+// a game laid out for Latin (or Japanese) text reserves for one line, so the
+// text gets cut off. The run is therefore drawn slightly smaller and, when
+// needed, moved a little, so that it stays inside the vertical band that the
+// game font's own Latin text occupies.
+//   -complexscale=NN  fixed size in percent (50..100) instead of automatic
+struct tTVPFitKey
+{
+	std::wstring Main, Shape;
+	tjs_int Height;
+	tjs_uint32 Flags;
+	bool operator < (const tTVPFitKey &rhs) const
+	{
+		if(Height != rhs.Height) return Height < rhs.Height;
+		if(Flags != rhs.Flags) return Flags < rhs.Flags;
+		if(Main != rhs.Main) return Main < rhs.Main;
+		return Shape < rhs.Shape;
+	}
+};
+struct tTVPFit
+{
+	tjs_int Height; // em height to shape and draw with
+	tjs_int ShiftY; // pixels to move the run down (negative: up)
+};
+static std::map<tTVPFitKey, tTVPFit> TVPFits;
+//---------------------------------------------------------------------------
+static bool TVPMeasureInk(tTVPShapeFont *sf, const wchar_t * const *samples, double &top, double &bottom)
+{
+	// highest and lowest ink (pixels above / below the baseline) of the samples
+	if(!sf || !sf->HbFont) return false;
+	bool any = false;
+	top = bottom = 0;
+	for(int s = 0; samples[s]; s++)
+	{
+		hb_buffer_t *buf = hb_buffer_create();
+		hb_buffer_add_utf16(buf, (const uint16_t*)samples[s], -1, 0, -1);
+		hb_buffer_guess_segment_properties(buf);
+		hb_buffer_set_direction(buf, HB_DIRECTION_LTR);
+		hb_shape(sf->HbFont, buf, NULL, 0);
+		unsigned int count = 0;
+		hb_glyph_info_t *info = hb_buffer_get_glyph_infos(buf, &count);
+		hb_glyph_position_t *pos = hb_buffer_get_glyph_positions(buf, &count);
+		for(unsigned int i = 0; i < count; i++)
+		{
+			hb_glyph_extents_t ext;
+			if(info[i].codepoint == 0) continue;
+			if(!hb_font_get_glyph_extents(sf->HbFont, info[i].codepoint, &ext)) continue;
+			if(ext.height == 0) continue;
+			double t = (pos[i].y_offset + ext.y_bearing) / 64.0;
+			double b = -(pos[i].y_offset + ext.y_bearing + ext.height) / 64.0;
+			if(!any || t > top) top = t;
+			if(!any || b > bottom) bottom = b;
+			any = true;
+		}
+		hb_buffer_destroy(buf);
+	}
+	return any;
+}
+//---------------------------------------------------------------------------
+static tTVPFit TVPGetFit(const tTVPFont &font, tTVPShapeFont *mainfont, tTVPShapeFont *sf, const ttstr &face)
+{
+	tjs_int height = font.Height < 0 ? -font.Height : font.Height;
+	if(height == 0) height = 1;
+
+	tTVPFitKey key;
+	key.Main = font.Face.AsStdString();
+	key.Shape = face.AsStdString();
+	key.Height = height;
+	key.Flags = font.Flags & (TVP_TF_ITALIC|TVP_TF_BOLD);
+	std::map<tTVPFitKey, tTVPFit>::iterator it = TVPFits.find(key);
+	if(it != TVPFits.end()) return it->second;
+	if(TVPFits.size() > 256) TVPFits.clear();
+
+	tTVPFit fit;
+	fit.Height = height;
+	fit.ShiftY = 0;
+
+	static const wchar_t * const burmese[] = {
+		L"\x1000\x103C\x102D\x102F",                         // medial ra + upper vowel
+		L"\x1019\x103C\x102D\x102F\x1037",                   // + dot below
+		L"\x1000\x103B\x103D\x1014\x103A\x102F\x1015\x103A",  // medials below
+		L"\x101B\x103E\x102F", L"\x101C\x103E\x1030",         // ha + u / uu
+		L"\x1026\x1038", L"\x1005\x103D\x1032",               // tall independent vowel, ai
+		L"\x1004\x103C\x102D\x1019\x1037\x103A",
+		L"\x1000\x103C\x103D\x1031\x1038",
+		L"\x101E\x1004\x103A\x1039\x1018\x1031\x102C",        // kinzi
+		NULL };
+	static const wchar_t * const latin[] = { L"gjpqy", NULL };
+
+	double top = 0, bottom = 0;
+	TEXTMETRICW tm;
+	ZeroMemory(&tm, sizeof(tm));
+	if(mainfont && mainfont->DC && ::GetTextMetricsW(mainfont->DC, &tm) && tm.tmAscent > 0 &&
+		TVPMeasureInk(sf, burmese, top, bottom) && top > 0)
+	{
+		// the band the game font's Latin text uses
+		double asc = tm.tmAscent;
+		double desc = tm.tmDescent;
+		double ltop, lbottom;
+		if(mainfont->HbFont && TVPMeasureInk(mainfont, latin, ltop, lbottom) && lbottom > 0)
+			desc = lbottom + 1;
+		if(desc < height / 5.0) desc = height / 5.0;
+		if(bottom < 0) bottom = 0;
+
+		double scale = 1.0;
+		if(top + bottom > asc + desc) scale = (asc + desc) / (top + bottom);
+		if(scale < 0.70) scale = 0.70;
+
+		tTJSVariant val;
+		if(TVPGetCommandLine(TJS_W("-complexscale"), &val))
+		{
+			tjs_int percent = (tjs_int)val;
+			if(percent >= 50 && percent <= 100) scale = percent / 100.0;
+		}
+
+		fit.Height = (tjs_int)floor(height * scale + 0.5);
+		if(fit.Height < 4) fit.Height = height < 4 ? height : 4;
+		scale = (double)fit.Height / height;
+
+		double lo = top * scale - asc;      // > 0: must move down by this much
+		double hi = desc - bottom * scale;  // may move down by at most this much
+		double shift;
+		if(lo <= 0 && hi >= 0) shift = 0;
+		else if(lo > 0 && hi >= lo) shift = lo;
+		else if(hi < 0 && lo <= hi) shift = hi;
+		else shift = (lo + hi) / 2;         // cannot fit: share the overflow
+		fit.ShiftY = (tjs_int)floor(shift + 0.5);
+
+		if(fit.Height != height || fit.ShiftY != 0)
+		{
+			TVPAddLog(ttstr(TJS_W("(info) Complex text: '")) + face + TJS_W("' is drawn at ") +
+				ttstr(fit.Height) + TJS_W("px inside '") + font.Face + TJS_W("' ") +
+				ttstr(height) + TJS_W("px lines (vertical shift ") + ttstr(fit.ShiftY) + TJS_W("px)"));
+		}
+	}
+	TVPFits[key] = fit;
+	return fit;
+}
+//---------------------------------------------------------------------------
+static tTVPShapeFont *TVPSelectShapeFontUnfitted(const tTVPFont &font, const tjs_char *text, tjs_int len, ttstr &face);
+static tTVPShapeFont *TVPSelectShapeFont(const tTVPFont &font, const tjs_char *text, tjs_int len,
+	ttstr &face, tjs_int &height, tjs_int &shifty)
+{
+	height = font.Height < 0 ? -font.Height : font.Height;
+	if(height == 0) height = 1;
+	shifty = 0;
+	tTVPShapeFont *sf = TVPSelectShapeFontUnfitted(font, text, len, face);
+	if(!sf || !sf->HbFont) return sf;
+
+	// only Burmese is fitted; other scripts keep their size
+	tjs_char probe = text[0];
+	bool myanmar = (probe >= 0x1000 && probe <= 0x109F) || (probe >= 0xA9E0 && probe <= 0xA9FF) ||
+		(probe >= 0xAA60 && probe <= 0xAA7F);
+	if(!myanmar) return sf;
+
+	tTVPShapeFont *mainfont = TVPGetShapeFont(font.Face, font.Height, font.Flags, true);
+	tTVPFit fit = TVPGetFit(font, mainfont, sf, face);
+	shifty = fit.ShiftY;
+	if(fit.Height != height)
+	{
+		tTVPShapeFont *scaled = TVPGetShapeFont(face, fit.Height, font.Flags, true);
+		if(scaled && scaled->HbFont)
+		{
+			height = fit.Height;
+			return scaled;
+		}
+	}
+	return sf;
+}
+//---------------------------------------------------------------------------
+static tTVPShapeFont *TVPSelectShapeFontUnfitted(const tTVPFont &font, const tjs_char *text, tjs_int len, ttstr &face)
 {
 	// probe with the first character that is not a joiner
 	tjs_char probe = text[0];
@@ -237,13 +413,15 @@ static inline tjs_int TVPRound26_6(hb_position_t v)
 }
 //---------------------------------------------------------------------------
 bool TVPShapeComplexRun(const tTVPFont &font, const tjs_char *text, tjs_int len,
-	std::vector<tTVPShapedGlyph> &glyphs, ttstr &face, tjs_int &width)
+	std::vector<tTVPShapedGlyph> &glyphs, ttstr &face, tjs_int &height, tjs_int &width)
 {
 	glyphs.clear();
 	width = 0;
+	height = font.Height < 0 ? -font.Height : font.Height;
 	if(len <= 0) return false;
 
-	tTVPShapeFont *sf = TVPSelectShapeFont(font, text, len, face);
+	tjs_int shifty = 0;
+	tTVPShapeFont *sf = TVPSelectShapeFont(font, text, len, face, height, shifty);
 	if(!sf || !sf->HbFont) return false;
 
 	hb_buffer_t *buf = hb_buffer_create();
@@ -269,7 +447,7 @@ bool TVPShapeComplexRun(const tTVPFont &font, const tjs_char *text, tjs_int len,
 		tTVPShapedGlyph g;
 		g.Glyph = (tjs_uint16)info[i].codepoint;
 		g.X = TVPRound26_6(pen + pos[i].x_offset);
-		g.Y = TVPRound26_6(pos[i].y_offset);
+		g.Y = TVPRound26_6(pos[i].y_offset) - shifty;
 		glyphs.push_back(g);
 		pen += pos[i].x_advance;
 	}
@@ -291,8 +469,8 @@ tjs_int TVPGetComplexRunWidth(const tTVPFont &font, const tjs_char *text, tjs_in
 
 	std::vector<tTVPShapedGlyph> glyphs;
 	ttstr face;
-	tjs_int width;
-	if(!TVPShapeComplexRun(font, text, len, glyphs, face, width)) return -1;
+	tjs_int width, height;
+	if(!TVPShapeComplexRun(font, text, len, glyphs, face, height, width)) return -1;
 	last_text = cur;
 	last_font = font;
 	last_width = width;

@@ -37,10 +37,12 @@ tjs_int TVPGetComplexRunLength(const tjs_char *text);
 tjs_int TVPGetTextClusterLength(const tjs_char *text);
 
 // Shapes a run. "face" receives the font face actually used (the requested
-// face, or a fallback face when the requested one has no glyphs for the run).
+// face, or a fallback face when the requested one has no glyphs for the run)
+// and "height" the em height in pixels it has to be drawn with: Burmese is
+// drawn slightly smaller than the layer font so that it fits the line.
 // "width" receives the total advance of the run in pixels.
 bool TVPShapeComplexRun(const tTVPFont &font, const tjs_char *text, tjs_int len,
-	std::vector<tTVPShapedGlyph> &glyphs, ttstr &face, tjs_int &width);
+	std::vector<tTVPShapedGlyph> &glyphs, ttstr &face, tjs_int &height, tjs_int &width);
 
 // Width in pixels of a run, or -1 when it cannot be shaped.
 tjs_int TVPGetComplexRunWidth(const tTVPFont &font, const tjs_char *text, tjs_int len);

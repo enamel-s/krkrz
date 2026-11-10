@@ -1482,16 +1482,18 @@ void tTVPNativeBaseBitmap::DrawTextMultiple(const tTVPRect &destrect,
 			std::vector<tTVPShapedGlyph> glyphs;
 			ttstr runface;
 			tjs_int runwidth = 0;
-			if(TVPShapeComplexRun(Font, p, runlen, glyphs, runface, runwidth))
+			tjs_int runheight = 0;
+			if(TVPShapeComplexRun(Font, p, runlen, glyphs, runface, runheight, runwidth))
 			{
 				tTVPFontAndCharacterData gfont = font;
 				gfont.IsGlyph = true;
-				if(runface != Font.Face)
+				if(runface != Font.Face || runheight != std::abs(Font.Height))
 				{
-					// fallback font
+					// fallback font and / or fitted size
 					gfont.Font.Face = runface;
+					gfont.Font.Height = runheight;
 					gfont.FontHash = tTJSHashFunc<ttstr>::Make(runface);
-					gfont.FontHash ^= Font.Height ^ Font.Flags ^ Font.Angle;
+					gfont.FontHash ^= runheight ^ Font.Flags ^ Font.Angle;
 				}
 				for(size_t gi = 0; gi < glyphs.size(); gi++)
 				{
