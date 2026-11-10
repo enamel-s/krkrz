@@ -874,6 +874,29 @@ void TVPExecuteStartupScript()
 	{
 		try
 		{
+			// krkr2 compatibility: when k2compat.xp3 sits next to the executable,
+			// load the Kirikiri2 compatibility layer (KAGParser, MenuItem, Pad,
+			// Window.innerSunken ...) before the game's own startup script.
+			// Disable with -k2compat=no.
+			{
+				tTJSVariant k2val;
+				bool k2enable = true;
+				if(TVPGetCommandLine(TJS_W("-k2compat"), &k2val) )
+				{
+					if(ttstr(k2val) == TJS_W("no")) k2enable = false;
+				}
+				if(k2enable)
+				{
+					TVPExecuteScript(ttstr(
+						TJS_W("if(typeof global.Krkr2CompatUtils == 'undefined' && ")
+						TJS_W("Storages.isExistentStorage(System.exePath + 'k2compat.xp3')) {")
+						TJS_W(" var base = System.exePath + 'k2compat.xp3>';")
+						TJS_W(" Scripts.execStorage(base + 'k2compat.tjs');")
+						TJS_W(" Krkr2CompatUtils.scriptBase = base;")
+						TJS_W(" Debug.message('krkr2 compatibility layer loaded from ' + base);")
+						TJS_W("}")));
+				}
+			}
 			TVPAddLog( TVPInfoLoadingStartupScript + TVPStartupScriptName );
 			TVPExecuteStorage(TVPStartupScriptName);
 			TVPAddLog( (const tjs_char*)TVPInfoStartupScriptEnded );

@@ -181,11 +181,21 @@ public:
 					{
 						Stream->ReadBuffer(nbuf, size);
 						nbuf[size] = 0; // terminater
-						if( encoding == TJS_W("UTF-8") ) {
+						// krkr2 compatibility: text without BOM that is not valid
+						// UTF-8 is treated as Shift_JIS (the Kirikiri2 default).
+						bool as_utf8 = ( encoding == TJS_W("UTF-8") );
+						if( as_utf8 ) {
 							BufferLen = TVPUtf8ToWideCharString((const char*)nbuf, NULL);
-							if(BufferLen == (size_t)-1) TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
+							if(BufferLen == (size_t)-1) as_utf8 = false;
+						}
+						if( as_utf8 ) {
 							Buffer = new tjs_char [ BufferLen +1];
 							TVPUtf8ToWideCharString((const char*)nbuf, Buffer);
+						} else if( encoding == TJS_W("UTF-8") ) {
+							BufferLen = TJS_narrowtowidelen((tjs_nchar*)nbuf);
+							if(BufferLen == (size_t)-1) TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
+							Buffer = new tjs_char [ BufferLen +1];
+							TJS_narrowtowide(Buffer, (tjs_nchar*)nbuf, BufferLen);
 						} else if( encoding == TJS_W("Shift_JIS") ) {
 							BufferLen = TJS_narrowtowidelen((tjs_nchar*)nbuf);
 							if(BufferLen == (size_t)-1) TVPThrowExceptionMessage(TJSNarrowToWideConversionError);
