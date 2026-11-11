@@ -182,7 +182,7 @@ void TVPInitWindowOptions()
 
 
 TTVPWindowForm::TTVPWindowForm( tTVPApplication* app, tTJSNI_Window* ni, tTJSNI_Window* parent ) : tTVPWindow(), CurrentMouseCursor(crDefault), touch_points_(this),
-	LayerLeft(0), LayerTop(0), ObsoleteInnerSunken(true), ObsoleteShowScrollBars(true), FullScreenSavedMenu(NULL), LayerWidth(32), LayerHeight(32),
+	LayerLeft(0), LayerTop(0), ObsoleteInnerSunken(true), ObsoleteShowScrollBars(true), FullScreenSavedMenu(NULL), FullScreenMenuArmed(true), InMenuLoop(false), LayerWidth(32), LayerHeight(32),
 	LastMouseDownX(0), LastMouseDownY(0),
 	HintTimer(NULL), HintDelay(TVP_TOOLTIP_SHOW_DELAY), LastHintSender(NULL),
 	FullScreenDestRect(0,0,0,0) {
@@ -393,6 +393,17 @@ LRESULT WINAPI TTVPWindowForm::Proc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
 		}
 	}
 	switch( msg ) {
+	case WM_ENTERMENULOOP:
+		InMenuLoop = true;
+		break;
+	case WM_EXITMENULOOP:
+		InMenuLoop = false;
+		break;
+	case TVP_WM_FULLSCREENMENU:
+		PopupFullScreenMenu( (int)wParam );
+		return 0;
+	}
+	switch( msg ) {
 	case TVP_WM_SHOWVISIBLE:
 		WMShowVisible();
 		return 0;
@@ -410,7 +421,11 @@ LRESULT WINAPI TTVPWindowForm::Proc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
 	}
 }
 void TTVPWindowForm::WMShowVisible() {
-	SetVisible(true);
+	// Posted to modal windows when the application is re-activated while a
+	// window is fullscreen. By the time it arrives the modal state may be
+	// over (closing a dialog re-activates the main window): showing the
+	// window then would leave a non-modal ghost of the dialog on screen.
+	if( in_mode_ ) SetVisible(true);
 }
 void TTVPWindowForm::WMShowTop( WPARAM wParam ) {
 	if( GetVisible() ) {
@@ -858,6 +873,7 @@ void TTVPWindowForm::SetFullScreenMode( bool b ) {
 			SetWindowLong(GetHandle(), GWL_EXSTYLE, OrgExStyle);
 
 			// put the menu bar back
+			FullScreenMenuArmed = true;
 			if( FullScreenSavedMenu ) {
 				if( ::GetMenu( GetHandle() ) == NULL ) ::SetMenu( GetHandle(), FullScreenSavedMenu );
 				FullScreenSavedMenu = NULL;
@@ -1662,7 +1678,47 @@ HDWP TTVPWindowForm::ShowTop(HDWP hdwp) {
 	}
 	return hdwp;
 }
+void TTVPWindowForm::UpdateFullScreenMenu( int clientx, int clienty ) {
+	// In fullscreen the menu bar is removed (it would take room from the
+	// picture). As in Kirikiri2 the menu is still reachable: it pops up when
+	// the pointer touches the top edge of the screen.
+	if( FullScreenSavedMenu == NULL || TVPFullScreenedWindow != this || InMenuLoop ) return;
+	if( clienty > 12 ) {
+		FullScreenMenuArmed = true;
+	} else if( clienty <= 0 && FullScreenMenuArmed ) {
+		FullScreenMenuArmed = false;
+		::PostMessage( GetHandle(), TVP_WM_FULLSCREENMENU, (WPARAM)clientx, 0 );
+	}
+}
+void TTVPWindowForm::PopupFullScreenMenu( int clientx ) {
+	if( FullScreenSavedMenu == NULL || TVPFullScreenedWindow != this || InMenuLoop ) return;
+	// a pop-up that lists the top-level entries of the menu bar; the sub
+	// menus are shared with the bar, so they are detached again afterwards
+	HMENU popup = ::CreatePopupMenu();
+	if( popup == NULL ) return;
+	int count = ::GetMenuItemCount( FullScreenSavedMenu );
+	for( int i = 0; i < count; i++ ) {
+		wchar_t caption[256];
+		caption[0] = 0;
+		::GetMenuStringW( FullScreenSavedMenu, i, caption, 255, MF_BYPOSITION );
+		UINT state = ::GetMenuState( FullScreenSavedMenu, i, MF_BYPOSITION );
+		UINT flags = MF_STRING | ( (state & (MF_GRAYED|MF_DISABLED)) ? MF_GRAYED : 0 );
+		HMENU sub = ::GetSubMenu( FullScreenSavedMenu, i );
+		if( sub ) {
+			::AppendMenuW( popup, flags | MF_POPUP, (UINT_PTR)sub, caption );
+		} else {
+			::AppendMenuW( popup, flags, ::GetMenuItemID( FullScreenSavedMenu, i ), caption );
+		}
+	}
+	POINT pt = { clientx, 0 };
+	::ClientToScreen( GetHandle(), &pt );
+	::SetForegroundWindow( GetHandle() );
+	::TrackPopupMenu( popup, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON, pt.x, pt.y, 0, GetHandle(), NULL );
+	while( ::GetMenuItemCount( popup ) > 0 ) ::RemoveMenu( popup, 0, MF_BYPOSITION ); // keeps the shared sub menus alive
+	::DestroyMenu( popup );
+}
 void TTVPWindowForm::OnMouseMove( int shift, int x, int y ) {
+	UpdateFullScreenMenu( x, y );
 	TranslateWindowToDrawArea(x, y);
 	MouseVelocityTracker.addMovement( TVPGetRoughTickCount32(), (float)x, (float)y );
 	if( TJSNativeInstance ) {
