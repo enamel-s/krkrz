@@ -182,7 +182,7 @@ void TVPInitWindowOptions()
 
 
 TTVPWindowForm::TTVPWindowForm( tTVPApplication* app, tTJSNI_Window* ni, tTJSNI_Window* parent ) : tTVPWindow(), CurrentMouseCursor(crDefault), touch_points_(this),
-	LayerLeft(0), LayerTop(0), ObsoleteInnerSunken(true), ObsoleteShowScrollBars(true), FullScreenSavedMenu(NULL), FullScreenMenuArmed(true), InMenuLoop(false), LayerWidth(32), LayerHeight(32),
+	LayerLeft(0), LayerTop(0), ObsoleteInnerSunken(true), ObsoleteShowScrollBars(true), FullScreenSavedMenu(NULL), FullScreenMenuBar(NULL), FullScreenMenuBarShownTick(0), InMenuLoop(false), LayerWidth(32), LayerHeight(32),
 	LastMouseDownX(0), LastMouseDownY(0),
 	HintTimer(NULL), HintDelay(TVP_TOOLTIP_SHOW_DELAY), LastHintSender(NULL),
 	FullScreenDestRect(0,0,0,0) {
@@ -251,6 +251,7 @@ TTVPWindowForm::TTVPWindowForm( tTVPApplication* app, tTJSNI_Window* ni, tTJSNI_
 	DisplayRotate = -1;
 }
 TTVPWindowForm::~TTVPWindowForm() {
+	DestroyFullScreenMenuBar();
 	if( HintTimer ) {
 		delete HintTimer;
 		HintTimer = NULL;
@@ -399,9 +400,6 @@ LRESULT WINAPI TTVPWindowForm::Proc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
 	case WM_EXITMENULOOP:
 		InMenuLoop = false;
 		break;
-	case TVP_WM_FULLSCREENMENU:
-		PopupFullScreenMenu( (int)wParam );
-		return 0;
 	}
 	switch( msg ) {
 	case TVP_WM_SHOWVISIBLE:
@@ -803,6 +801,7 @@ void TTVPWindowForm::SetFullScreenMode( bool b ) {
 			try {
 				if(TJSNativeInstance) TVPSwitchToFullScreen( GetHandle(), desired_fs_w, desired_fs_h, TJSNativeInstance->GetDrawDevice() );
 			} catch(...) {
+				DestroyFullScreenMenuBar();
 				if( FullScreenSavedMenu ) {
 					::SetMenu( GetHandle(), FullScreenSavedMenu );
 					FullScreenSavedMenu = NULL;
@@ -873,7 +872,7 @@ void TTVPWindowForm::SetFullScreenMode( bool b ) {
 			SetWindowLong(GetHandle(), GWL_EXSTYLE, OrgExStyle);
 
 			// put the menu bar back
-			FullScreenMenuArmed = true;
+			DestroyFullScreenMenuBar();
 			if( FullScreenSavedMenu ) {
 				if( ::GetMenu( GetHandle() ) == NULL ) ::SetMenu( GetHandle(), FullScreenSavedMenu );
 				FullScreenSavedMenu = NULL;
@@ -1678,44 +1677,96 @@ HDWP TTVPWindowForm::ShowTop(HDWP hdwp) {
 	}
 	return hdwp;
 }
-void TTVPWindowForm::UpdateFullScreenMenu( int clientx, int clienty ) {
-	// In fullscreen the menu bar is removed (it would take room from the
-	// picture). As in Kirikiri2 the menu is still reachable: it pops up when
-	// the pointer touches the top edge of the screen.
-	if( FullScreenSavedMenu == NULL || TVPFullScreenedWindow != this || InMenuLoop ) return;
-	if( clienty > 12 ) {
-		FullScreenMenuArmed = true;
-	} else if( clienty <= 0 && FullScreenMenuArmed ) {
-		FullScreenMenuArmed = false;
-		::PostMessage( GetHandle(), TVP_WM_FULLSCREENMENU, (WPARAM)clientx, 0 );
-	}
-}
-void TTVPWindowForm::PopupFullScreenMenu( int clientx ) {
-	if( FullScreenSavedMenu == NULL || TVPFullScreenedWindow != this || InMenuLoop ) return;
-	// a pop-up that lists the top-level entries of the menu bar; the sub
-	// menus are shared with the bar, so they are detached again afterwards
-	HMENU popup = ::CreatePopupMenu();
-	if( popup == NULL ) return;
-	int count = ::GetMenuItemCount( FullScreenSavedMenu );
-	for( int i = 0; i < count; i++ ) {
-		wchar_t caption[256];
-		caption[0] = 0;
-		::GetMenuStringW( FullScreenSavedMenu, i, caption, 255, MF_BYPOSITION );
-		UINT state = ::GetMenuState( FullScreenSavedMenu, i, MF_BYPOSITION );
-		UINT flags = MF_STRING | ( (state & (MF_GRAYED|MF_DISABLED)) ? MF_GRAYED : 0 );
-		HMENU sub = ::GetSubMenu( FullScreenSavedMenu, i );
-		if( sub ) {
-			::AppendMenuW( popup, flags | MF_POPUP, (UINT_PTR)sub, caption );
-		} else {
-			::AppendMenuW( popup, flags, ::GetMenuItemID( FullScreenSavedMenu, i ), caption );
+//---------------------------------------------------------------------------
+// fullscreen menu bar
+//---------------------------------------------------------------------------
+// In fullscreen the menu bar is taken off the window: it would take room
+// from the picture. As in Kirikiri2 it is still reachable: when the pointer
+// touches the top edge of the screen a bar carrying the same menu appears
+// across the top, on top of the picture, and goes away when the pointer
+// leaves it.
+static const wchar_t * const TVPFullScreenMenuBarClass = L"TVPFullScreenMenuBar";
+static LRESULT CALLBACK TVPFullScreenMenuBarProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam ) {
+	TTVPWindowForm *form = (TTVPWindowForm*)::GetWindowLongPtr( hWnd, GWLP_USERDATA );
+	switch( msg ) {
+	case WM_COMMAND:
+		// menu commands belong to the game window (menu.dll listens there)
+		if( form && HIWORD(wParam) == 0 ) ::PostMessage( form->GetHandle(), WM_COMMAND, wParam, 0 );
+		return 0;
+	case WM_ENTERMENULOOP:
+		if( form ) form->SetInMenuLoop( true );
+		break;
+	case WM_EXITMENULOOP:
+		if( form ) {
+			form->SetInMenuLoop( false );
+			// using the menu made the bar the active window: give the
+			// keyboard back to the game
+			::SetActiveWindow( form->GetHandle() );
 		}
+		break;
+	case WM_TIMER:
+		if( form ) form->OnFullScreenMenuBarTimer();
+		return 0;
 	}
-	POINT pt = { clientx, 0 };
-	::ClientToScreen( GetHandle(), &pt );
-	::SetForegroundWindow( GetHandle() );
-	::TrackPopupMenu( popup, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON, pt.x, pt.y, 0, GetHandle(), NULL );
-	while( ::GetMenuItemCount( popup ) > 0 ) ::RemoveMenu( popup, 0, MF_BYPOSITION ); // keeps the shared sub menus alive
-	::DestroyMenu( popup );
+	return ::DefWindowProc( hWnd, msg, wParam, lParam );
+}
+void TTVPWindowForm::ShowFullScreenMenuBar() {
+	if( FullScreenSavedMenu == NULL || TVPFullScreenedWindow != this ) return;
+	if( FullScreenMenuBar == NULL ) {
+		static bool registered = false;
+		if( !registered ) {
+			WNDCLASSEXW wc = { sizeof(WNDCLASSEXW) };
+			wc.lpfnWndProc = TVPFullScreenMenuBarProc;
+			wc.hInstance = ::GetModuleHandle(NULL);
+			wc.hCursor = ::LoadCursor( NULL, IDC_ARROW );
+			wc.hbrBackground = (HBRUSH)(COLOR_MENU + 1);
+			wc.lpszClassName = TVPFullScreenMenuBarClass;
+			::RegisterClassExW( &wc );
+			registered = true;
+		}
+		FullScreenMenuBar = ::CreateWindowExW( WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+			TVPFullScreenMenuBarClass, L"", WS_POPUP, 0, 0, 16, 16, GetHandle(), NULL, ::GetModuleHandle(NULL), NULL );
+		if( FullScreenMenuBar == NULL ) return;
+		::SetWindowLongPtr( FullScreenMenuBar, GWLP_USERDATA, (LONG_PTR)this );
+	}
+	if( ::IsWindowVisible( FullScreenMenuBar ) ) return;
+	if( ::GetMenu( FullScreenMenuBar ) != FullScreenSavedMenu ) ::SetMenu( FullScreenMenuBar, FullScreenSavedMenu );
+	RECT r;
+	::GetWindowRect( GetHandle(), &r ); // the fullscreen window covers its monitor
+	::SetWindowPos( FullScreenMenuBar, HWND_TOPMOST, r.left, r.top, r.right - r.left, ::GetSystemMetrics(SM_CYMENU),
+		SWP_NOACTIVATE | SWP_SHOWWINDOW );
+	::DrawMenuBar( FullScreenMenuBar );
+	FullScreenMenuBarShownTick = ::GetTickCount();
+	::SetTimer( FullScreenMenuBar, 1, 100, NULL );
+}
+void TTVPWindowForm::HideFullScreenMenuBar() {
+	if( FullScreenMenuBar == NULL ) return;
+	::KillTimer( FullScreenMenuBar, 1 );
+	bool wasactive = ( ::GetActiveWindow() == FullScreenMenuBar );
+	::ShowWindow( FullScreenMenuBar, SW_HIDE );
+	if( wasactive ) ::SetActiveWindow( GetHandle() );
+}
+void TTVPWindowForm::DestroyFullScreenMenuBar() {
+	if( FullScreenMenuBar == NULL ) return;
+	::KillTimer( FullScreenMenuBar, 1 );
+	::SetMenu( FullScreenMenuBar, NULL ); // the menu itself belongs to the game window
+	::DestroyWindow( FullScreenMenuBar );
+	FullScreenMenuBar = NULL;
+	InMenuLoop = false;
+}
+void TTVPWindowForm::OnFullScreenMenuBarTimer() {
+	// hide the bar once the pointer has left it (never while a menu is open)
+	if( FullScreenMenuBar == NULL || InMenuLoop ) return;
+	if( TVPFullScreenedWindow != this ) { HideFullScreenMenuBar(); return; }
+	if( ::GetTickCount() - FullScreenMenuBarShownTick < 1500 ) return; // stay a moment after appearing
+	POINT pt;
+	RECT r;
+	if( !::GetCursorPos( &pt ) || !::GetWindowRect( FullScreenMenuBar, &r ) ) return;
+	if( pt.y > r.bottom + 6 || pt.x < r.left || pt.x >= r.right ) HideFullScreenMenuBar();
+}
+void TTVPWindowForm::UpdateFullScreenMenu( int clientx, int clienty ) {
+	if( FullScreenSavedMenu == NULL || TVPFullScreenedWindow != this ) return;
+	if( clienty <= 0 ) ShowFullScreenMenuBar();
 }
 void TTVPWindowForm::OnMouseMove( int shift, int x, int y ) {
 	UpdateFullScreenMenu( x, y );

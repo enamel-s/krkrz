@@ -71,7 +71,6 @@ tjs_uint32 TVPGetCurrentShiftKeyState();
 #define TVP_WM_SHOWTOP     (WM_USER + 3)
 #define TVP_WM_RETRIEVEFOCUS     (WM_USER + 4)
 #define TVP_WM_ACQUIREIMECONTROL    (WM_USER + 5)
-#define TVP_WM_FULLSCREENMENU      (WM_USER + 6)
 extern void TVPShowModalAtAppActivate();
 extern void TVPHideModalAtAppDeactivate();
 extern HDWP TVPShowModalAtTimer(HDWP);
@@ -166,10 +165,18 @@ private:
 	bool ObsoleteInnerSunken;
 	bool ObsoleteShowScrollBars;
 	HMENU FullScreenSavedMenu; // menu bar removed while in fullscreen
-	bool FullScreenMenuArmed;  // pointer has left the top edge since the last pop-up
+	HWND FullScreenMenuBar;    // bar window that carries the menu while in fullscreen
+	DWORD FullScreenMenuBarShownTick;
 	bool InMenuLoop;
 	void UpdateFullScreenMenu( int clientx, int clienty );
-	void PopupFullScreenMenu( int clientx );
+	void ShowFullScreenMenuBar();
+	void HideFullScreenMenuBar();
+	void DestroyFullScreenMenuBar();
+public:
+	// used by the bar window's procedure
+	void OnFullScreenMenuBarTimer();
+	void SetInMenuLoop( bool b ) { InMenuLoop = b; }
+private:
 	tjs_int LayerWidth;
 	tjs_int LayerHeight;
 	tjs_int ZoomDenom; // Zooming factor denominator (setting)
